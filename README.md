@@ -82,4 +82,4 @@ code JSON
 When EDUAgent launches, it automatically connects to all configured MCP servers and registers their tools.
 
 ## License
-MIT
+GPL-3.0
