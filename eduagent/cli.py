@@ -3,8 +3,61 @@ Interactive CLI setup & prompt loop for EDUAgent.
 """
 
 import argparse
+import os
+import sys
 from pathlib import Path
-from eduagent.agent import EDUAgent
+from eduagent.agent import EDUAgent, STATE_FILE
+
+
+def _state_summary(state: dict) -> str:
+    """Build a human-readable summary of a saved state."""
+    ws = state.get("work_dir", "?")
+    model = state.get("model", "default")
+    thinking = "ON" if state.get("thinking") else "OFF"
+    search = "ON" if state.get("search") else "OFF"
+    policy = state.get("shell_policy", "auto_safe_manual_unsafe")
+    hd = state.get("human_delay", True)
+    if hd:
+        mn = state.get("min_delay", 1.0)
+        mx = state.get("max_delay", 3.0)
+        delay_str = f"{mn}s-{mx}s"
+    else:
+        delay_str = "Disabled"
+    saved_ts = state.get("saved_at", 0)
+    import time as _time
+    saved_str = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(saved_ts)) if saved_ts else "unknown"
+
+    return (
+        f"   Workspace : {ws}\n"
+        f"   Model     : {model}\n"
+        f"   Thinking  : {thinking}\n"
+        f"   Search    : {search}\n"
+        f"   Shell Pol.: {policy}\n"
+        f"   Delay     : {delay_str}\n"
+        f"   Saved at  : {saved_str}"
+    )
+
+
+def _delete_state() -> None:
+    """Remove the saved state file if it exists."""
+    try:
+        STATE_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _has_explicit_cli_args(args: argparse.Namespace) -> bool:
+    """Return True if any config-relevant CLI arg was explicitly provided."""
+    return bool(
+        args.work_dir
+        or args.model
+        or args.thinking
+        or args.search
+        or args.shell_policy
+        or args.no_delay
+        or args.min_delay != 1.0
+        or args.max_delay != 3.0
+    )
 
 
 def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float, float]:
@@ -75,40 +128,95 @@ def main():
     parser.add_argument("--no-delay", action="store_true", help="Disable human-like request pacing delay")
     parser.add_argument("--min-delay", type=float, default=1.0, help="Minimum request delay (seconds)")
     parser.add_argument("--max-delay", type=float, default=3.0, help="Maximum request delay (seconds)")
+    parser.add_argument("--no-resume", action="store_true", help="Skip resume prompt and start fresh")
     args = parser.parse_args()
 
-    if not (args.work_dir and args.model and args.shell_policy):
-        work_dir, selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay = (
-            prompt_agent_configuration()
-        )
-    else:
-        work_dir = str(Path(args.work_dir).expanduser().resolve())
-        selected_model = args.model
-        thinking = args.thinking
-        search = args.search
-        shell_policy = args.shell_policy
-        human_delay = not args.no_delay
-        min_delay = args.min_delay
-        max_delay = args.max_delay
+    # ------------------------------------------------------------------
+    #  Resume-on-startup: check for saved state (skip if CLI args given)
+    # ------------------------------------------------------------------
+    resumed = False
+    saved_state = None
+    if not args.no_resume and not _has_explicit_cli_args(args):
+        saved_state = EDUAgent.load_state()
+        if saved_state:
+            print("💾 A previous session was found:")
+            print(_state_summary(saved_state))
+            ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
+            if ans in ("", "y", "yes"):
+                resumed = True
+            else:
+                _delete_state()
+                saved_state = None
 
-    agent = EDUAgent(
-        work_dir=work_dir,
-        model=selected_model,
-        thinking=thinking,
-        search=search,
-        shell_policy=shell_policy,
-        human_delay=human_delay,
-        min_delay=min_delay,
-        max_delay=max_delay,
-    )
+    if resumed and saved_state:
+        work_dir = saved_state.get("work_dir", "./workspace")
+        # Verify work_dir still exists; fall back to prompt if missing
+        if not Path(work_dir).exists():
+            print(f"⚠️  Saved workspace '{work_dir}' no longer exists.")
+            ans2 = input("   Create it now? (y/n) [default: y]: ").strip().lower()
+            if ans2 in ("", "y", "yes"):
+                Path(work_dir).mkdir(parents=True, exist_ok=True)
+            else:
+                _delete_state()
+                resumed = False
+                saved_state = None
+
+    if resumed and saved_state:
+        # Build agent with saved settings
+        work_dir = saved_state.get("work_dir", "./workspace")
+        selected_model = saved_state.get("model", "default")
+        thinking = saved_state.get("thinking", False)
+        search = saved_state.get("search", False)
+        shell_policy = saved_state.get("shell_policy", "auto_safe_manual_unsafe")
+        human_delay = saved_state.get("human_delay", True)
+        min_delay = saved_state.get("min_delay", 1.0)
+        max_delay = saved_state.get("max_delay", 3.0)
+
+        agent = EDUAgent(
+            work_dir=work_dir,
+            model=selected_model,
+            thinking=thinking,
+            search=search,
+            shell_policy=shell_policy,
+            human_delay=human_delay,
+            min_delay=min_delay,
+            max_delay=max_delay,
+        )
+        agent.resume_from_state(saved_state)
+    else:
+        # Normal startup: prompt or use CLI args
+        if not (args.work_dir and args.model and args.shell_policy):
+            work_dir, selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay = (
+                prompt_agent_configuration()
+            )
+        else:
+            work_dir = str(Path(args.work_dir).expanduser().resolve())
+            selected_model = args.model
+            thinking = args.thinking
+            search = args.search
+            shell_policy = args.shell_policy
+            human_delay = not args.no_delay
+            min_delay = args.min_delay
+            max_delay = args.max_delay
+
+        agent = EDUAgent(
+            work_dir=work_dir,
+            model=selected_model,
+            thinking=thinking,
+            search=search,
+            shell_policy=shell_policy,
+            human_delay=human_delay,
+            min_delay=min_delay,
+            max_delay=max_delay,
+        )
 
     print(f"\n🤖 EDUAgent Active!")
     print(f"📁 Workspace Directory : {agent.file_tools.work_dir}")
-    print(f"🧠 DeepThink Reasoning : {'ON' if thinking else 'OFF'}")
-    print(f"🌐 Web Search Mode    : {'ON' if search else 'OFF'}")
-    print(f"🛡️ Shell Policy       : {shell_policy}")
-    if human_delay:
-        print(f"⏱️ Request Pacing      : {min_delay}s - {max_delay}s")
+    print(f"🧠 DeepThink Reasoning : {'ON' if agent.thinking else 'OFF'}")
+    print(f"🌐 Web Search Mode    : {'ON' if agent.search else 'OFF'}")
+    print(f"🛡️ Shell Policy       : {agent.shell_tool.policy}")
+    if agent.client.human_delay:
+        print(f"⏱️ Request Pacing      : {agent.client.min_delay}s - {agent.client.max_delay}s")
     else:
         print("⏱️ Request Pacing      : Disabled")
     print("💡 Commands: Type '/new' to start a new chat, 'exit' to quit.")
@@ -154,12 +262,16 @@ def main():
                 agent.client.human_delay = human_delay
                 agent.client.min_delay = min_delay
                 agent.client.max_delay = max_delay
+                # Persist the new config immediately
+                agent.save_state()
                 print(f"🔄 Switched to new chat session.\n")
                 continue
 
             agent.chat(user_input, verbose=True)
             print()
     finally:
+        # Save state on every graceful exit
+        agent.save_state()
         agent.close()
 
 

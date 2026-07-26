@@ -10,12 +10,16 @@ import html
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Iterator, List, Optional, Tuple
 
 from .client import DeepSeekClient, Reply
 from .mcp import MCPManager
 from .tools import FileTools, ShellTool
+
+ROOT = Path(__file__).resolve().parent.parent
+STATE_FILE = ROOT / "session" / "agent_state.json"
 
 
 class ToolCallStreamFilter:
@@ -589,6 +593,44 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
             yield chunk
 
         self._conversation_id = stream_obj.conversation_id
+
+    def save_state(self, path: Path = STATE_FILE) -> None:
+        """Persist current conversation_id, settings, and work_dir to a JSON state file."""
+        data = {
+            "conversation_id": self._conversation_id,
+            "work_dir": str(self.file_tools.work_dir),
+            "model": self.model,
+            "thinking": self.thinking,
+            "search": self.search,
+            "shell_policy": self.shell_tool.policy,
+            "human_delay": self.client.human_delay,
+            "min_delay": self.client.min_delay,
+            "max_delay": self.client.max_delay,
+            "saved_at": time.time(),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def load_state(path: Path = STATE_FILE) -> Optional[dict]:
+        """Read and parse agent_state.json. Returns None if missing or corrupt."""
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def resume_from_state(self, state: dict) -> None:
+        """Restore agent settings from a previously saved state dict."""
+        self._conversation_id = state.get("conversation_id")
+        self.model = state.get("model", "default")
+        self.thinking = state.get("thinking", False)
+        self.search = state.get("search", False)
+        self.shell_tool.policy = state.get("shell_policy", "auto_safe_manual_unsafe")
+        self.client.human_delay = state.get("human_delay", True)
+        self.client.min_delay = state.get("min_delay", 1.0)
+        self.client.max_delay = state.get("max_delay", 3.0)
 
     def close(self) -> None:
         self.mcp_manager.close()
