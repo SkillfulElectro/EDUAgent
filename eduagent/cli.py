@@ -113,14 +113,35 @@ def main():
     print("💡 Commands: Type '/new' to start a new chat, 'exit' to quit.")
     print("💡 Open https://chat.deepseek.com in your browser to inspect tool calls under the hood!\n")
 
+    def read_multiline() -> str:
+        """Read a multiline message from the user.
+
+        First line is read with 'You: ' prompt.  Subsequent lines are read
+        with a continuation prompt '...  '.  Input ends when the user enters
+        an empty line or the delimiter '/end'.
+        """
+        lines = []
+        first = input("You: ")
+        if first.strip().lower() in ("exit", "quit", "/exit", "/new"):
+            return first.strip()
+        lines.append(first)
+        while True:
+            line = input("...  ")
+            stripped = line.strip()
+            if stripped == "" or stripped.lower() == "/end":
+                break
+            lines.append(line)
+        return "\
+".join(lines)
+
     try:
         while True:
-            user_input = input("You: ").strip()
+            user_input = read_multiline()
             if not user_input:
                 continue
             if user_input.lower() in ("exit", "quit", "/exit"):
                 break
-            if user_input == "/new":
+            if user_input.lower() == "/new":
                 print("\n🔄 Starting a new chat session...")
                 work_dir, selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay = (
                     prompt_agent_configuration()

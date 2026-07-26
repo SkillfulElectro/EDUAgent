@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import threading
@@ -15,7 +16,7 @@ import httpx
 from .auth import Session, get_session
 from .pow import DeepSeekPow
 
-BASE = "https://chat.deepseek.com"
+BASE = os.environ.get("DEEPSEEK_BASE_URL", "https://chat.deepseek.com")
 COMPLETION_PATH = "/api/v0/chat/completion"
 
 DEFAULT_MODEL_TYPE = "default"
@@ -92,7 +93,13 @@ class DeepSeekClient:
             base_url=BASE,
             headers=self._base_headers(),
             cookies=self.session.cookies,
-            timeout=httpx.Timeout(120.0, read=300.0),
+            timeout=httpx.Timeout(
+                connect=None,   # No connect timeout
+                read=None,      # No read timeout
+                write=None,     # No write timeout
+                pool=None,      # No pool timeout
+            ),
+            transport=httpx.HTTPTransport(retries=3),  # Auto-retry on failures
         )
 
     def _base_headers(self) -> dict:
@@ -112,18 +119,37 @@ class DeepSeekClient:
         }
 
     def create_chat_session(self) -> str:
-        r = self._http.post("/api/v0/chat_session/create", json={})
-        r.raise_for_status()
-        return _biz(r.json())["chat_session"]["id"]
+        for attempt in range(3):
+            try:
+                r = self._http.post("/api/v0/chat_session/create", json={})
+                r.raise_for_status()
+                return _biz(r.json())["chat_session"]["id"]
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                if attempt == 2:
+                    raise
+                print(f"[client] Connection attempt {attempt+1} failed, retrying... ({e})")
+                time.sleep(2 ** attempt)
 
     def _pow_header(self, target_path: str = COMPLETION_PATH) -> str:
-        r = self._http.post(
-            "/api/v0/chat/create_pow_challenge", json={"target_path": target_path}
-        )
-        r.raise_for_status()
-        challenge = _biz(r.json())["challenge"]
-        with self._pow_lock:
-            return self._pow.make_header(challenge)
+        last_exc = None
+        for attempt in range(5):
+            try:
+                r = self._http.post(
+                    "/api/v0/chat/create_pow_challenge",
+                    json={"target_path": target_path},
+                )
+                r.raise_for_status()
+                challenge = _biz(r.json())["challenge"]
+                with self._pow_lock:
+                    return self._pow.make_header(challenge)
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                last_exc = e
+                if attempt < 4:
+                    wait = 2 ** attempt  # 1s, 2s, 4s, 8s
+                    print(f"[client] PoW challenge request attempt {attempt+1} failed, "
+                          f"retrying in {wait}s... ({e})")
+                    time.sleep(wait)
+        raise last_exc
 
     def stream(
         self,
