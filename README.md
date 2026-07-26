@@ -18,6 +18,7 @@ By driving the actual DeepSeek chat session, EDUAgent lets you execute local san
   2. **Auto Accept**: Run all commands automatically.
   3. **Auto Safe, Reject Unsafe**: Auto-run safe commands; automatically reject dangerous commands.
   4. **Auto Safe, Manual Unsafe**: Auto-run safe commands; prompt user for manual approval when high-risk commands are detected.
+- **Multiline Input Support**: Paste or type multi-line code blocks, logs, or messages directly in the CLI. Press Enter on an empty line or type `/end` to finish input.
 - **Customizable Request Pacing**: Configure human-like request delays (`min_delay` and `max_delay`) or disable delays entirely.
 - **MCP Server Configuration**: Add stdio MCP server configurations to `mcp_servers.json` to expose custom tools.
 
@@ -57,6 +58,20 @@ At startup, EDUAgent will check your authentication status and present interacti
   Enable randomized delay before requests? (y/n):
   Enter delay range in seconds (min-max) [default: 1.0-3.0]:
 ```
+### 3. Chat Interaction
+
+Once the agent is active, you can chat with it interactively. To send **multiline messages** (e.g., code snippets, logs, structured text), simply continue typing after the first line:
+
+```txt
+You: Explain this function:
+...  def greet(name):
+...      return f"Hello, {name}!"
+...  
+```
+Press Enter on an **empty line** (or type `/end`) to submit. The entire multiline block is sent as one message.
+
+Single-line messages work as before — just press Enter once after your input.
+
 ## Configuring MCP Servers (mcp_servers.json)
 
 To connect external Model Context Protocol (MCP) servers, add them to mcp_servers.json using the standard JSON format:
