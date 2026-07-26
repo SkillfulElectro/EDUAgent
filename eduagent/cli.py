@@ -3,6 +3,7 @@ Interactive CLI setup & prompt loop for EDUAgent.
 """
 
 import argparse
+from pathlib import Path
 from eduagent.agent import EDUAgent
 
 
@@ -13,7 +14,7 @@ def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float
 
     # 1. Workspace
     ws_input = input("📁 Workspace directory [default: ./workspace]: ").strip()
-    work_dir = ws_input if ws_input else "./workspace"
+    work_dir = str(Path(ws_input if ws_input else "./workspace").expanduser().resolve())
 
     # 2. Model
     print("\n🤖 Select DeepSeek Model:")
@@ -66,7 +67,7 @@ def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float
 
 def main():
     parser = argparse.ArgumentParser(description="EDUAgent Interactive Terminal")
-    parser.add_argument("--work-dir", "-w", help="Restricted directory for file & shell tools")
+    parser.add_argument("--work-dir", "-w", help="Restricted directory for file & shell tools (relative paths and ~ accepted)")
     parser.add_argument("--model", "-m", choices=["default", "expert"], help="Model type")
     parser.add_argument("--thinking", "-t", action="store_true", help="Enable DeepThink reasoning")
     parser.add_argument("--search", "-s", action="store_true", help="Enable web search")
@@ -81,7 +82,7 @@ def main():
             prompt_agent_configuration()
         )
     else:
-        work_dir = args.work_dir
+        work_dir = str(Path(args.work_dir).expanduser().resolve())
         selected_model = args.model
         thinking = args.thinking
         search = args.search

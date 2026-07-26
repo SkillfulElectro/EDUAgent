@@ -45,7 +45,7 @@ class FileTools:
     """Sandboxed file operations restricted to `work_dir`."""
 
     def __init__(self, work_dir: str | Path = "."):
-        self.work_dir = Path(work_dir).resolve()
+        self.work_dir = Path(work_dir).expanduser().resolve()
         if not self.work_dir.exists():
             self.work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -212,7 +212,7 @@ class ShellTool:
     """Safe shell command execution tool governed by configurable security policies."""
 
     def __init__(self, work_dir: Path, policy: str = "auto_safe_manual_unsafe"):
-        self.work_dir = Path(work_dir).resolve()
+        self.work_dir = Path(work_dir).expanduser().resolve()
         # Policy options: 'manual', 'auto', 'auto_safe_reject_unsafe', 'auto_safe_manual_unsafe'
         self.policy = policy
 
