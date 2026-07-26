@@ -1,5 +1,7 @@
 # EDUAgent
 
+> for educational purposes only
+
 The project goal is to visualize how tool calls and mcp works under the hood in the chat interface DeepSeek. so its like running an Agent and user can open their deepseek chat interface and see what really happened under the hood.
 
 By driving the actual DeepSeek chat session, EDUAgent lets you execute local sandboxed file tools, shell commands, and remote Model Context Protocol (MCP) tools while keeping the complete chat thread, reasoning process, tool call payloads (`<tool_call>`), and tool outputs (`<tool_result>`) visible directly in your DeepSeek web UI.
