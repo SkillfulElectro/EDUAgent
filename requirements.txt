@@ -1,0 +1,4 @@
+playwright>=1.44        # browser automation: login + PoW solving
+httpx>=0.27             # HTTP client for chat streaming
+python-dotenv>=1.0      # load environment variables
+wasmtime>=21.0          # runs DeepSeek's PoW WASM module
