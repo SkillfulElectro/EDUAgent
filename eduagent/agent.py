@@ -16,6 +16,7 @@ from typing import Callable, Iterator, List, Optional, Tuple
 
 from .client import DeepSeekClient, Reply
 from .mcp import MCPManager
+from .todo import TodoListTools
 from .tools import FileTools, ShellTool
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -345,6 +346,7 @@ class EDUAgent:
 
         self.file_tools = FileTools(work_dir)
         self.shell_tool = ShellTool(self.file_tools.work_dir, policy=shell_policy)
+        self.todo_tools = TodoListTools(self.file_tools.work_dir)
         self.mcp_manager = MCPManager()
 
         if mcp_config_path:
@@ -380,6 +382,7 @@ class EDUAgent:
         all_defs = (
             self.file_tools.get_tool_definitions()
             + self.shell_tool.get_tool_definitions()
+            + self.todo_tools.get_tool_definitions()
             + self.mcp_manager.get_tool_definitions()
         )
 
@@ -395,6 +398,16 @@ class EDUAgent:
             lines.append(f"- Name: {t['name']}")
             lines.append(f"  Description: {t['description']}")
             lines.append(f"  Parameters: {json.dumps(t['parameters'])}")
+
+        lines.append("""
+When starting a task or resuming a conversation, you MUST:
+  1. First call `list_tasks` to review any existing pending or in-progress tasks.
+  2. If tasks exist, create a brief plan and update the todo list with any new
+     steps before executing work.
+  3. Mark tasks as `in_progress` when you begin working on them, and `done`
+     when completed.
+  4. If the todo list is empty, confirm with the user before starting new work.
+""")
 
         lines.append("""
 To execute a tool, format your output strictly as a JSON object inside <tool_call> tags:
@@ -431,6 +444,13 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
                 return shell_map[name](**arguments)
             except Exception as e:
                 return f"Shell Tool Error: {e}"
+
+        todo_map = self.todo_tools.get_tool_map()
+        if name in todo_map:
+            try:
+                return todo_map[name](**arguments)
+            except Exception as e:
+                return f"Todo Tool Error: {e}"
 
         if self.mcp_manager.has_tool(name):
             try:

@@ -219,7 +219,7 @@ def main():
         print(f"⏱️ Request Pacing      : {agent.client.min_delay}s - {agent.client.max_delay}s")
     else:
         print("⏱️ Request Pacing      : Disabled")
-    print("💡 Commands: Type '/new' to start a new chat, 'exit' to quit.")
+    print("💡 Commands: Type '/new' to reconfigure & start fresh, '/move_to_new' to auto-resume via todo list, 'exit' to quit.")
     print("💡 Open https://chat.deepseek.com in your browser to inspect tool calls under the hood!\n")
 
     def read_multiline() -> str:
@@ -231,7 +231,7 @@ def main():
         """
         lines = []
         first = input("You: ")
-        if first.strip().lower() in ("exit", "quit", "/exit", "/new"):
+        if first.strip().lower() in ("exit", "quit", "/exit", "/new", "/move_to_new"):
             return first.strip()
         lines.append(first)
         while True:
@@ -265,6 +265,18 @@ def main():
                 # Persist the new config immediately
                 agent.save_state()
                 print(f"🔄 Switched to new chat session.\n")
+                continue
+
+            if user_input.strip().lower() == "/move_to_new":
+                agent.new_chat()
+                agent.save_state()
+                print("🔄 Started a new chat session (workspace and settings unchanged).")
+                print("📋 Resuming previous task via todo list...\n")
+                agent.chat(
+                    "continue with the task, use your to do list tool to check where you left.",
+                    verbose=True
+                )
+                print()
                 continue
 
             agent.chat(user_input, verbose=True)
