@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from eduagent.agent import EDUAgent, STATE_FILE
+from eduagent.agent import EDUAgent
 
 
 def _state_summary(state: dict) -> str:
@@ -38,10 +38,11 @@ def _state_summary(state: dict) -> str:
     )
 
 
-def _delete_state() -> None:
-    """Remove the saved state file if it exists."""
+def _delete_state(work_dir: str | Path) -> None:
+    """Remove the workspace-specific saved state file if it exists."""
+    path = Path(work_dir) / ".eduagent" / "agent_state.json"
     try:
-        STATE_FILE.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -104,9 +105,9 @@ def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float
     print("\n⏱️  Human-like Request Pacing Delay:")
     delay_enable = input("  Enable randomized delay before requests? (y/n) [default: y]: ").strip().lower()
     human_delay = delay_enable not in ("n", "no", "false", "0")
-    min_delay, max_delay = 1.0, 3.0
+    min_delay, max_delay = 5.0, 10.0
     if human_delay:
-        delay_range = input("  Enter delay range in seconds (min-max) [default: 1.0-3.0]: ").strip()
+        delay_range = input("  Enter delay range in seconds (min-max) [default: 5.0-10.0]: ").strip()
         if delay_range and "-" in delay_range:
             try:
                 parts = delay_range.split("-")
@@ -129,6 +130,7 @@ def main():
     parser.add_argument("--min-delay", type=float, default=1.0, help="Minimum request delay (seconds)")
     parser.add_argument("--max-delay", type=float, default=3.0, help="Maximum request delay (seconds)")
     parser.add_argument("--no-resume", action="store_true", help="Skip resume prompt and start fresh")
+    parser.add_argument("--max-iterations", "-M", type=int, default=20, help="Max tool-call iterations per chat turn (default: 10)")
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -136,8 +138,14 @@ def main():
     # ------------------------------------------------------------------
     resumed = False
     saved_state = None
+    # Determine which workspace to check for saved state
+    if args.work_dir:
+        check_work_dir = str(Path(args.work_dir).expanduser().resolve())
+    else:
+        check_work_dir = str(Path("./workspace").expanduser().resolve())
+
     if not args.no_resume and not _has_explicit_cli_args(args):
-        saved_state = EDUAgent.load_state()
+        saved_state = EDUAgent.load_state(work_dir=check_work_dir)
         if saved_state:
             print("💾 A previous session was found:")
             print(_state_summary(saved_state))
@@ -145,7 +153,7 @@ def main():
             if ans in ("", "y", "yes"):
                 resumed = True
             else:
-                _delete_state()
+                _delete_state(check_work_dir)
                 saved_state = None
 
     if resumed and saved_state:
@@ -157,7 +165,7 @@ def main():
             if ans2 in ("", "y", "yes"):
                 Path(work_dir).mkdir(parents=True, exist_ok=True)
             else:
-                _delete_state()
+                _delete_state(work_dir)
                 resumed = False
                 saved_state = None
 
@@ -240,8 +248,57 @@ def main():
             if stripped == "" or stripped.lower() == "/end":
                 break
             lines.append(line)
-        return "\
-".join(lines)
+        return "\n".join(lines)
+
+    def _handle_exhaustion(reply):
+        """Prompt user to continue when the agent hits the iteration limit.
+        Returns the final reply after all continuations (or the original if declined)."""
+        auto_continue = False
+        auto_continue_count = 0
+        while reply.exhausted:
+            if auto_continue:
+                auto_continue_count += 1
+                if auto_continue_count > 5:
+                    print("\n🛑 Auto-continue safety limit (5) reached. Dropping back to prompt.\n")
+                    break
+                print("⏳ Auto-continuing...\n")
+                reply = agent.chat(
+                    "Continue where you left off. Check your todo list to resume.",
+                    verbose=True,
+                    max_tool_iterations=args.max_iterations,
+                )
+                agent.save_state()
+                continue
+
+            print(f"\n⚠️  Agent hit the tool-iteration limit ({args.max_iterations} steps).")
+            try:
+                tasks_output = agent.todo_tools.list_tasks()
+                if tasks_output and "No tasks" not in tasks_output:
+                    print("📋 Pending tasks:")
+                    print(tasks_output)
+            except Exception:
+                pass
+            choice = input("   Continue? (y/n/auto) [default: y]: ").strip().lower()
+            if choice == "n":
+                break
+            elif choice == "auto":
+                auto_continue = True
+                auto_continue_count = 0
+                print("⏳ Auto-continuing future exhaustions...")
+                reply = agent.chat(
+                    "Continue where you left off. Check your todo list to resume.",
+                    verbose=True,
+                    max_tool_iterations=args.max_iterations,
+                )
+                agent.save_state()
+            else:  # default 'y'
+                reply = agent.chat(
+                    "Continue where you left off. Check your todo list to resume.",
+                    verbose=True,
+                    max_tool_iterations=args.max_iterations,
+                )
+                agent.save_state()
+        return reply
 
     try:
         while True:
@@ -272,14 +329,19 @@ def main():
                 agent.save_state()
                 print("🔄 Started a new chat session (workspace and settings unchanged).")
                 print("📋 Resuming previous task via todo list...\n")
-                agent.chat(
+                reply = agent.chat(
                     "continue with the task, use your to do list tool to check where you left.",
-                    verbose=True
+                    verbose=True,
+                    max_tool_iterations=args.max_iterations,
                 )
+                agent.save_state()
+                _handle_exhaustion(reply)
                 print()
                 continue
 
-            agent.chat(user_input, verbose=True)
+            reply = agent.chat(user_input, verbose=True, max_tool_iterations=args.max_iterations)
+            agent.save_state()  # persist state after every response for crash resilience
+            _handle_exhaustion(reply)
             print()
     finally:
         # Save state on every graceful exit

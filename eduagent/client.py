@@ -16,13 +16,23 @@ import httpx
 from .auth import Session, get_session
 from .pow import DeepSeekPow
 
+import logging
+
+_logger = logging.getLogger(__name__)
+
 BASE = os.environ.get("DEEPSEEK_BASE_URL", "https://chat.deepseek.com")
 COMPLETION_PATH = "/api/v0/chat/completion"
 
 DEFAULT_MODEL_TYPE = "default"
 _CID_SEP = ":"
+
+_CID_PATTERN = re.compile(r"^[^:]+(?::\d+)?$")
 TOOL_CALL_REGEX = re.compile(r"<?tool_call>.*?(?:</tool_call>|$)", re.DOTALL)
 
+
+class SessionExpiredError(RuntimeError):
+    """Raised when the DeepSeek server indicates the chat session is invalid."""
+    pass
 
 def _encode_cid(session_id: str, message_id: Optional[int]) -> str:
     if message_id is None:
@@ -31,11 +41,24 @@ def _encode_cid(session_id: str, message_id: Optional[int]) -> str:
 
 
 def _decode_cid(conversation_id: Optional[str]) -> tuple[Optional[str], Optional[int]]:
-    if not conversation_id:
+    if conversation_id is None:
+        return None, None
+    if not isinstance(conversation_id, str) or not conversation_id.strip():
+        _logger.warning(
+            "_decode_cid: got invalid conversation_id=%r, treating as None",
+            conversation_id,
+        )
+        return None, None
+    if not _CID_PATTERN.match(conversation_id):
+        _logger.warning(
+            "_decode_cid: conversation_id=%r does not match expected "
+            "format 'session_id[:message_id]', treating as None",
+            conversation_id,
+        )
         return None, None
     session_id, _, msg = conversation_id.partition(_CID_SEP)
     parent = int(msg) if msg.isdigit() else None
-    return (session_id or None), parent
+    return session_id, parent
 
 
 @dataclass
@@ -43,6 +66,7 @@ class Reply:
     text: str
     conversation_id: str
     thinking: Optional[str] = None
+    exhausted: bool = False
 
     def __str__(self) -> str:
         return self.text
@@ -234,11 +258,51 @@ class _Stream:
             body["model_type"] = self._model
         headers = {"x-ds-pow-response": self._client._pow_header()}
         meta: dict = {}
-        with self._client._http.stream(
-            "POST", COMPLETION_PATH, json=body, headers=headers
-        ) as resp:
-            resp.raise_for_status()
-            yield from _parse_sse(resp.iter_lines(), meta, stream_events=self._stream_events)
+        try:
+            with self._client._http.stream(
+                "POST", COMPLETION_PATH, json=body, headers=headers
+            ) as resp:
+                # Check HTTP status for session errors
+                if resp.status_code == 404:
+                    raise SessionExpiredError(
+                        f"Chat session '{self._session_id}' not found on server. "
+                        "It may have expired or been deleted."
+                    )
+                if resp.status_code >= 400:
+                    # Read body for error details
+                    try:
+                        error_body = resp.read().decode()
+                    except Exception:
+                        error_body = ""
+                    if "session" in error_body.lower() and (
+                        "not found" in error_body.lower()
+                        or "expired" in error_body.lower()
+                        or "invalid" in error_body.lower()
+                    ):
+                        raise SessionExpiredError(
+                            f"Chat session '{self._session_id}' expired: {error_body[:200]}"
+                        )
+                    resp.raise_for_status()
+                resp.raise_for_status()
+                yield from _parse_sse(resp.iter_lines(), meta, stream_events=self._stream_events)
+        except SessionExpiredError:
+            raise  # Re-raise for agent to handle
+        except httpx.HTTPStatusError as e:
+            # Also check HTTP errors for session-related messages
+            if e.response is not None:
+                try:
+                    body = e.response.text
+                except Exception:
+                    body = ""
+                if "session" in body.lower() and (
+                    "not found" in body.lower()
+                    or "expired" in body.lower()
+                    or "invalid" in body.lower()
+                ):
+                    raise SessionExpiredError(
+                        f"Chat session '{self._session_id}' expired: {body[:200]}"
+                    ) from e
+            raise
         if meta.get("message_id") is not None:
             self._message_id = meta["message_id"]
         if meta.get("thinking"):

@@ -1,7 +1,7 @@
 """
 Persistent Todo List Tool for EDUAgent.
 
-Tasks are stored in `todo_list.json` inside the workspace directory.
+Tasks are stored in `<workspace>/.eduagent/todo_list.json`.
 """
 
 from __future__ import annotations
@@ -16,20 +16,23 @@ logger = logging.getLogger(__name__)
 
 
 class TodoListTools:
-    """Persistent todo list persisted in `work_dir / todo_list.json`."""
+    """Persistent todo list persisted in `work_dir / .eduagent / todo_list.json`."""
 
     def __init__(self, work_dir: str | Path):
         self.work_dir = Path(work_dir).expanduser().resolve()
         if not self.work_dir.exists():
             self.work_dir.mkdir(parents=True, exist_ok=True)
-        self._file_path = self.work_dir / "todo_list.json"
+        # Store todo list in a .eduagent subdirectory inside the workspace
+        self._data_dir = self.work_dir / ".eduagent"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._file_path = self._data_dir / "todo_list.json"
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _load(self) -> Dict[str, Any]:
-        """Load and parse todo_list.json; return empty dict if missing/corrupt."""
+        """Load and parse .eduagent/todo_list.json; return empty dict if missing/corrupt."""
         if not self._file_path.exists():
             return {"tasks": []}
         try:
@@ -43,7 +46,7 @@ class TodoListTools:
             return {"tasks": []}
 
     def _save(self, data: Dict[str, Any]) -> None:
-        """Persist data to todo_list.json."""
+        """Persist data to .eduagent/todo_list.json."""
         self._file_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     @staticmethod

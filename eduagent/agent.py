@@ -14,14 +14,10 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, List, Optional, Tuple
 
-from .client import DeepSeekClient, Reply
+from .client import DeepSeekClient, Reply, SessionExpiredError
 from .mcp import MCPManager
 from .todo import TodoListTools
 from .tools import FileTools, ShellTool
-
-ROOT = Path(__file__).resolve().parent.parent
-STATE_FILE = ROOT / "session" / "agent_state.json"
-
 
 class ToolCallStreamFilter:
     """Filters out raw <tool_call> tags and JSON blocks from live terminal output,
@@ -365,6 +361,15 @@ class EDUAgent:
 
     @conversation_id.setter
     def conversation_id(self, cid: Optional[str]) -> None:
+        if cid is not None and (not isinstance(cid, str) or not cid.strip()):
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "conversation_id setter: rejecting invalid value=%r, "
+                "setting to None instead",
+                cid,
+            )
+            cid = None
         self._conversation_id = cid
 
     def new_chat(
@@ -422,6 +427,16 @@ To execute a tool, format your output strictly as a JSON object inside <tool_cal
 
 You can perform one tool call per turn. After receiving <tool_result>, present your analysis or final answer.
 """)
+
+        lines.append("""
+Important - Tool-Iteration Limit and Checkpointing:
+- You are limited to a maximum number of tool calls per user message (indicated by the iteration counter in <tool_result>, e.g. iteration 5/10).
+- When you have only 1-2 iterations remaining, you MUST stop issuing further tools and instead:
+    1. Update the todo list with your current progress.
+    2. Write a brief progress summary for the user.
+    3. End your response so the user can say continue to resume.
+- When the user says continue or resume, first call list_tasks to find where you left off.
+""")
         return "\n".join(lines)
 
     def _prepare_prompt(self, message: str) -> str:
@@ -478,74 +493,111 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
 
         while iteration < max_tool_iterations:
             iteration += 1
+            # Safety: if _conversation_id is somehow empty/whitespace, treat as None
+            if self._conversation_id is not None and (
+                not isinstance(self._conversation_id, str) or not self._conversation_id.strip()
+            ):
+                import logging
+                _logger = logging.getLogger(__name__)
+                _logger.warning(
+                    "chat(): _conversation_id=%r is invalid mid-chat, resetting to None",
+                    self._conversation_id,
+                )
+                self._conversation_id = None
             model_type = self.model if self._conversation_id is None else None
 
-            stream_obj = self.client.stream(
-                prompt=current_prompt,
-                conversation_id=self._conversation_id,
-                model=model_type,
-                thinking=use_thinking,
-                search=use_search,
-                stream_events=True,
-            )
+            stream_obj = None  # initialize for exception handler
+            try:
+                stream_obj = self.client.stream(
+                    prompt=current_prompt,
+                    conversation_id=self._conversation_id,
+                    model=model_type,
+                    thinking=use_thinking,
+                    search=use_search,
+                    stream_events=True,
+                )
 
-            text_chunks = []
-            thinking_chunks = []
-            printed_think_header = False
-            printed_text_header = False
+                text_chunks = []
+                thinking_chunks = []
+                printed_think_header = False
+                printed_text_header = False
 
-            def think_writer(text: str):
-                nonlocal printed_think_header
-                if not text or not verbose:
-                    return
-                if not printed_think_header:
-                    sys.stdout.write("\n🧠 Thinking:\n")
-                    printed_think_header = True
-                sys.stdout.write(text)
-                sys.stdout.flush()
-
-            def on_tool_call_in_think():
-                if verbose:
-                    sys.stdout.write("\ntool call . . . . .\n")
+                def think_writer(text: str):
+                    nonlocal printed_think_header
+                    if not text or not verbose:
+                        return
+                    if not printed_think_header:
+                        sys.stdout.write("\n🧠 Thinking:\n")
+                        printed_think_header = True
+                    sys.stdout.write(text)
                     sys.stdout.flush()
 
-            def text_writer(text: str):
-                nonlocal printed_text_header
-                if not text or not verbose:
-                    return
-                if not printed_text_header:
-                    if printed_think_header:
-                        sys.stdout.write("\n\n")
-                    sys.stdout.write("🤖 DeepSeek:\n")
-                    printed_text_header = True
-                sys.stdout.write(text)
-                sys.stdout.flush()
+                def on_tool_call_in_think():
+                    if verbose:
+                        sys.stdout.write("\ntool call . . . . .\n")
+                        sys.stdout.flush()
 
-            def on_tool_call_in_text():
-                if verbose:
-                    sys.stdout.write("\ntool call . . . . .\n")
+                def text_writer(text: str):
+                    nonlocal printed_text_header
+                    if not text or not verbose:
+                        return
+                    if not printed_text_header:
+                        if printed_think_header:
+                            sys.stdout.write("\n\n")
+                        sys.stdout.write("🤖 DeepSeek:\n")
+                        printed_text_header = True
+                    sys.stdout.write(text)
                     sys.stdout.flush()
 
-            think_filter = ToolCallStreamFilter(on_text=think_writer, on_tool_call_start=on_tool_call_in_think)
-            text_filter = ToolCallStreamFilter(on_text=text_writer, on_tool_call_start=on_tool_call_in_text)
+                def on_tool_call_in_text():
+                    if verbose:
+                        sys.stdout.write("\ntool call . . . . .\n")
+                        sys.stdout.flush()
 
-            for event in stream_obj:
-                etype, chunk = event if isinstance(event, tuple) else ("text", event)
-                if etype == "think":
-                    thinking_chunks.append(chunk)
-                    think_filter.feed(chunk)
-                elif etype == "text":
-                    text_chunks.append(chunk)
-                    text_filter.feed(chunk)
+                think_filter = ToolCallStreamFilter(on_text=think_writer, on_tool_call_start=on_tool_call_in_think)
+                text_filter = ToolCallStreamFilter(on_text=text_writer, on_tool_call_start=on_tool_call_in_text)
 
-            think_filter.flush()
-            text_filter.flush()
+                for event in stream_obj:
+                    etype, chunk = event if isinstance(event, tuple) else ("text", event)
+                    if etype == "think":
+                        thinking_chunks.append(chunk)
+                        think_filter.feed(chunk)
+                    elif etype == "text":
+                        text_chunks.append(chunk)
+                        text_filter.feed(chunk)
 
-            if verbose and (printed_think_header or printed_text_header):
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+                think_filter.flush()
+                text_filter.flush()
 
-            self._conversation_id = stream_obj.conversation_id
+                if verbose and (printed_think_header or printed_text_header):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+
+                self._conversation_id = stream_obj.conversation_id
+            except SessionExpiredError as e:
+                if verbose:
+                    print(f"\n⚠️  Session expired: {e}")
+                    print("🔄 Creating a new chat session and retrying...\n")
+                # Reset to start a fresh session
+                self._conversation_id = None
+                # Re-prepare the prompt (will include system instructions again
+                # since _conversation_id is now None)
+                current_prompt = self._prepare_prompt(message)
+                iteration = 0  # reset iteration counter
+                continue  # retry from top of while loop
+            except Exception:
+                # CRITICAL: capture the new conversation_id even on error.
+                # If a new session was created (session_id is set in _Stream),
+                # we must preserve it so the next retry continues the same
+                # session instead of creating yet another one.
+                if stream_obj is not None:
+                    partial_cid = stream_obj.conversation_id
+                    # Only update if we have a session_id (not just an empty string)
+                    if partial_cid and ":" not in partial_cid:
+                        # partial_cid is just the session_id (no message_id yet)
+                        # Store it so we don't orphan this session
+                        self._conversation_id = partial_cid
+                raise  # re-raise for caller to handle
             full_text = "".join(text_chunks)
             full_thinking = "".join(thinking_chunks) or stream_obj.thinking
 
@@ -581,13 +633,19 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
                         output_summary += f"\n     ... ({len(lines_res) - 10} more lines)"
                     print(f"   Output:\n{output_summary}\n")
 
+                remaining = max_tool_iterations - iteration
+                iter_note = f"\n(iteration {iteration}/{max_tool_iterations}, {remaining} remaining)"
                 results.append(
-                    f"<tool_result>\nTool '{t_name}' execution output:\n{res}\n</tool_result>"
+                    f"<tool_result>\nTool '{t_name}' execution output ({iteration}/{max_tool_iterations}):\n{res}{iter_note}\n</tool_result>"
                 )
 
             current_prompt = "\n".join(results)
 
-        return last_reply or Reply(text="", conversation_id=self._conversation_id or "")
+        # Loop exhausted — mark reply so caller knows the agent was cut off mid-work
+        if last_reply is None:
+            last_reply = Reply(text="", conversation_id=self._conversation_id or "")
+        last_reply.exhausted = True
+        return last_reply
 
     def stream(
         self,
@@ -614,10 +672,29 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
 
         self._conversation_id = stream_obj.conversation_id
 
-    def save_state(self, path: Path = STATE_FILE) -> None:
-        """Persist current conversation_id, settings, and work_dir to a JSON state file."""
+    def _state_file_path(self) -> Path:
+        """Return the workspace-specific agent state file path.
+
+        Mirrors TodoListTools storage: <work_dir>/.eduagent/agent_state.json
+        """
+        data_dir = self.file_tools.work_dir / ".eduagent"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / "agent_state.json"
+
+    def save_state(self, path: Optional[Path] = None) -> None:
+        """Persist current conversation_id, settings, and work_dir to a JSON state file.
+
+        By default saves to the workspace-specific location
+        ``<work_dir>/.eduagent/agent_state.json``.  Pass *path* to override.
+        """
+        if path is None:
+            path = self._state_file_path()
+        cid = self._conversation_id
+        # Normalize: None and empty string both become None in the saved file
+        if cid is not None and (not isinstance(cid, str) or not cid.strip()):
+            cid = None
         data = {
-            "conversation_id": self._conversation_id,
+            "conversation_id": cid,
             "work_dir": str(self.file_tools.work_dir),
             "model": self.model,
             "thinking": self.thinking,
@@ -632,8 +709,13 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     @staticmethod
-    def load_state(path: Path = STATE_FILE) -> Optional[dict]:
-        """Read and parse agent_state.json. Returns None if missing or corrupt."""
+    def load_state(work_dir: str | Path) -> Optional[dict]:
+        """Read and parse agent_state.json from a workspace directory.
+
+        Reads from ``<work_dir>/.eduagent/agent_state.json``.
+        Returns None if missing or corrupt.
+        """
+        path = Path(work_dir) / ".eduagent" / "agent_state.json"
         if not path.exists():
             return None
         try:
@@ -643,7 +725,18 @@ You can perform one tool call per turn. After receiving <tool_result>, present y
 
     def resume_from_state(self, state: dict) -> None:
         """Restore agent settings from a previously saved state dict."""
-        self._conversation_id = state.get("conversation_id")
+        cid = state.get("conversation_id")
+        # Sanitize: empty string or whitespace-only → None
+        if cid is not None and (not isinstance(cid, str) or not cid.strip()):
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "resume_from_state: invalid stored conversation_id=%r, "
+                "discarding and starting fresh",
+                cid,
+            )
+            cid = None
+        self._conversation_id = cid
         self.model = state.get("model", "default")
         self.thinking = state.get("thinking", False)
         self.search = state.get("search", False)
