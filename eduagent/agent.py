@@ -323,8 +323,8 @@ class EDUAgent:
         search: bool = False,
         shell_policy: str = "auto_safe_manual_unsafe",
         human_delay: bool = True,
-        min_delay: float = 1.0,
-        max_delay: float = 3.0,
+        min_delay: float = 5.0,
+        max_delay: float = 10.0,
         system_prompt: Optional[str] = None,
         mcp_servers: Optional[List[List[str] | str]] = None,
         mcp_config_path: Optional[str | Path] = "mcp_servers.json",
@@ -673,19 +673,19 @@ Important - Tool-Iteration Limit and Checkpointing:
         self._conversation_id = stream_obj.conversation_id
 
     def _state_file_path(self) -> Path:
-        """Return the workspace-specific agent state file path.
+        """Return the workspace-specific agent session state file path.
 
-        Mirrors TodoListTools storage: <work_dir>/.eduagent/agent_state.json
+        Mirrors TodoListTools storage: <work_dir>/.eduagent/agent_session.json
         """
         data_dir = self.file_tools.work_dir / ".eduagent"
         data_dir.mkdir(parents=True, exist_ok=True)
-        return data_dir / "agent_state.json"
+        return data_dir / "agent_session.json"
 
     def save_state(self, path: Optional[Path] = None) -> None:
         """Persist current conversation_id, settings, and work_dir to a JSON state file.
 
         By default saves to the workspace-specific location
-        ``<work_dir>/.eduagent/agent_state.json``.  Pass *path* to override.
+        ``<work_dir>/.eduagent/agent_session.json``.  Pass *path* to override.
         """
         if path is None:
             path = self._state_file_path()
@@ -710,18 +710,21 @@ Important - Tool-Iteration Limit and Checkpointing:
 
     @staticmethod
     def load_state(work_dir: str | Path) -> Optional[dict]:
-        """Read and parse agent_state.json from a workspace directory.
+        """Read and parse agent_session.json / agent_state.json from a workspace directory.
 
-        Reads from ``<work_dir>/.eduagent/agent_state.json``.
+        Tries ``<work_dir>/.eduagent/agent_session.json`` first, then
+        ``<work_dir>/.eduagent/agent_state.json`` as fallback.
         Returns None if missing or corrupt.
         """
-        path = Path(work_dir) / ".eduagent" / "agent_state.json"
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
+        for fname in ("agent_session.json", "agent_state.json"):
+            path = Path(work_dir) / ".eduagent" / fname
+            if not path.exists():
+                continue
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+        return None
 
     def resume_from_state(self, state: dict) -> None:
         """Restore agent settings from a previously saved state dict."""
@@ -742,8 +745,8 @@ Important - Tool-Iteration Limit and Checkpointing:
         self.search = state.get("search", False)
         self.shell_tool.policy = state.get("shell_policy", "auto_safe_manual_unsafe")
         self.client.human_delay = state.get("human_delay", True)
-        self.client.min_delay = state.get("min_delay", 1.0)
-        self.client.max_delay = state.get("max_delay", 3.0)
+        self.client.min_delay = state.get("min_delay", 5.0)
+        self.client.max_delay = state.get("max_delay", 10.0)
 
     def close(self) -> None:
         self.mcp_manager.close()

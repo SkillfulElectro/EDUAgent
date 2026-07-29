@@ -3,6 +3,7 @@ Interactive CLI setup & prompt loop for EDUAgent.
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -18,8 +19,8 @@ def _state_summary(state: dict) -> str:
     policy = state.get("shell_policy", "auto_safe_manual_unsafe")
     hd = state.get("human_delay", True)
     if hd:
-        mn = state.get("min_delay", 1.0)
-        mx = state.get("max_delay", 3.0)
+        mn = state.get("min_delay", 5.0)
+        mx = state.get("max_delay", 10.0)
         delay_str = f"{mn}s-{mx}s"
     else:
         delay_str = "Disabled"
@@ -39,53 +40,42 @@ def _state_summary(state: dict) -> str:
 
 
 def _delete_state(work_dir: str | Path) -> None:
-    """Remove the workspace-specific saved state file if it exists."""
-    path = Path(work_dir) / ".eduagent" / "agent_state.json"
-    try:
-        path.unlink(missing_ok=True)
-    except Exception:
-        pass
+    """Remove the workspace-specific saved state file(s) if they exist."""
+    for fname in ("agent_session.json", "agent_state.json"):
+        path = Path(work_dir) / ".eduagent" / fname
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
-def _has_explicit_cli_args(args: argparse.Namespace) -> bool:
-    """Return True if any config-relevant CLI arg was explicitly provided."""
-    return bool(
-        args.work_dir
-        or args.model
-        or args.thinking
-        or args.search
-        or args.shell_policy
-        or args.no_delay
-        or args.min_delay != 1.0
-        or args.max_delay != 3.0
-    )
-
-
-def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float, float]:
-    """Ask user for workspace, model, thinking, search, shell policy, and human delay settings."""
+def prompt_workspace() -> str:
+    """Ask user for the workspace directory only."""
     print("⚙️  EDUAgent Launch Setup")
     print("--------------------------------------------------")
-
-    # 1. Workspace
     ws_input = input("📁 Workspace directory [default: ./workspace]: ").strip()
-    work_dir = str(Path(ws_input if ws_input else "./workspace").expanduser().resolve())
+    return str(Path(ws_input if ws_input else "./workspace").expanduser().resolve())
 
-    # 2. Model
+
+def prompt_remaining_config() -> tuple[str, bool, bool, str, bool, float, float]:
+    """Ask user for model, thinking, search, shell policy, and human delay settings
+    (workspace has already been determined and resume check performed)."""
+    # Model
     print("\n🤖 Select DeepSeek Model:")
     print("  [1] Instant (Fast default model)")
     print("  [2] Expert  (Stronger, slower expert model)")
     model_choice = input("Enter choice (1/2) [default: 1]: ").strip().lower()
     selected_model = "expert" if model_choice in ("2", "expert", "deepseek-expert") else "default"
 
-    # 3. Thinking Mode
+    # Thinking Mode
     think_input = input("\n🧠 Enable DeepThink reasoning mode? (y/n) [default: n]: ").strip().lower()
     thinking = think_input in ("y", "yes")
 
-    # 4. Search Mode
+    # Search Mode
     search_input = input("🌐 Enable web search mode? (y/n) [default: n]: ").strip().lower()
     search = search_input in ("y", "yes")
 
-    # 5. Shell Execution Safety Policy
+    # Shell Execution Safety Policy
     print("\n🛡️  Select Shell Command Execution Policy:")
     print("  [1] Manual Accept             (Prompt before running any command)")
     print("  [2] Auto Accept               (Run all commands automatically)")
@@ -101,7 +91,7 @@ def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float
     }
     shell_policy = policies.get(policy_choice, "auto_safe_manual_unsafe")
 
-    # 6. Human Delay Customization
+    # Human Delay Customization
     print("\n⏱️  Human-like Request Pacing Delay:")
     delay_enable = input("  Enable randomized delay before requests? (y/n) [default: y]: ").strip().lower()
     human_delay = delay_enable not in ("n", "no", "false", "0")
@@ -114,9 +104,9 @@ def prompt_agent_configuration() -> tuple[str, str, bool, bool, str, bool, float
                 min_delay = float(parts[0].strip())
                 max_delay = float(parts[1].strip())
             except ValueError:
-                min_delay, max_delay = 1.0, 3.0
+                min_delay, max_delay = 5.0, 10.0
 
-    return work_dir, selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay
+    return selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay
 
 
 def main():
@@ -127,51 +117,74 @@ def main():
     parser.add_argument("--search", "-s", action="store_true", help="Enable web search")
     parser.add_argument("--shell-policy", choices=["manual", "auto", "auto_safe_reject_unsafe", "auto_safe_manual_unsafe"])
     parser.add_argument("--no-delay", action="store_true", help="Disable human-like request pacing delay")
-    parser.add_argument("--min-delay", type=float, default=1.0, help="Minimum request delay (seconds)")
-    parser.add_argument("--max-delay", type=float, default=3.0, help="Maximum request delay (seconds)")
+    parser.add_argument("--min-delay", type=float, default=5.0, help="Minimum request delay (seconds)")
+    parser.add_argument("--max-delay", type=float, default=10.0, help="Maximum request delay (seconds)")
     parser.add_argument("--no-resume", action="store_true", help="Skip resume prompt and start fresh")
     parser.add_argument("--max-iterations", "-M", type=int, default=20, help="Max tool-call iterations per chat turn (default: 10)")
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
-    #  Resume-on-startup: check for saved state (skip if CLI args given)
+    #  Step 1: Determine workspace FIRST (CLI arg or interactive prompt)
     # ------------------------------------------------------------------
     resumed = False
     saved_state = None
-    # Determine which workspace to check for saved state
-    if args.work_dir:
-        check_work_dir = str(Path(args.work_dir).expanduser().resolve())
-    else:
-        check_work_dir = str(Path("./workspace").expanduser().resolve())
+    state_source = None  # path of the file that was loaded
 
-    if not args.no_resume and not _has_explicit_cli_args(args):
-        saved_state = EDUAgent.load_state(work_dir=check_work_dir)
+    if args.work_dir:
+        work_dir = str(Path(args.work_dir).expanduser().resolve())
+    else:
+        work_dir = prompt_workspace()
+
+    # ------------------------------------------------------------------
+    #  Step 2: Resume check RIGHT AFTER workspace is known
+    #  (skip if --no-resume given).  This ensures agent_state.json and
+    #  todo_list.json are always loaded from the same workspace directory.
+    # ------------------------------------------------------------------
+    if not args.no_resume:
+        # Search ONLY the selected workspace directory for a saved session
+        for fname in ("agent_session.json", "agent_state.json"):
+            cand_path = Path(work_dir) / ".eduagent" / fname
+            if cand_path.exists():
+                try:
+                    saved_state = json.loads(cand_path.read_text(encoding="utf-8"))
+                    state_source = str(cand_path)
+                except Exception:
+                    continue
+                if saved_state:
+                    break
+
         if saved_state:
-            print("💾 A previous session was found:")
+            print(f"\n💾 A previous agent session was found ({state_source}):")
             print(_state_summary(saved_state))
             ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
             if ans in ("", "y", "yes"):
                 resumed = True
+                # Use work_dir from saved state (in case it moved)
+                work_dir = saved_state.get("work_dir", work_dir)
+                # Verify work_dir still exists; create if missing
+                if not Path(work_dir).exists():
+                    print(f"⚠️  Saved workspace '{work_dir}' no longer exists.")
+                    ans2 = input("   Create it now? (y/n) [default: y]: ").strip().lower()
+                    if ans2 in ("", "y", "yes"):
+                        Path(work_dir).mkdir(parents=True, exist_ok=True)
+                    else:
+                        _delete_state(work_dir)
+                        resumed = False
+                        saved_state = None
             else:
-                _delete_state(check_work_dir)
+                # Delete the stale file and don't resume
+                if state_source:
+                    try:
+                        Path(state_source).unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 saved_state = None
 
+    # ------------------------------------------------------------------
+    #  Step 3: Get remaining settings (from CLI args, saved state, or prompts)
+    # ------------------------------------------------------------------
     if resumed and saved_state:
-        work_dir = saved_state.get("work_dir", "./workspace")
-        # Verify work_dir still exists; fall back to prompt if missing
-        if not Path(work_dir).exists():
-            print(f"⚠️  Saved workspace '{work_dir}' no longer exists.")
-            ans2 = input("   Create it now? (y/n) [default: y]: ").strip().lower()
-            if ans2 in ("", "y", "yes"):
-                Path(work_dir).mkdir(parents=True, exist_ok=True)
-            else:
-                _delete_state(work_dir)
-                resumed = False
-                saved_state = None
-
-    if resumed and saved_state:
-        # Build agent with saved settings
-        work_dir = saved_state.get("work_dir", "./workspace")
+        # Use settings from saved state — skip prompts entirely
         selected_model = saved_state.get("model", "default")
         thinking = saved_state.get("thinking", False)
         search = saved_state.get("search", False)
@@ -179,7 +192,26 @@ def main():
         human_delay = saved_state.get("human_delay", True)
         min_delay = saved_state.get("min_delay", 1.0)
         max_delay = saved_state.get("max_delay", 3.0)
+    elif args.work_dir and args.model and args.shell_policy:
+        # Full CLI args provided — use them directly, skip prompts
+        selected_model = args.model
+        thinking = args.thinking
+        search = args.search
+        shell_policy = args.shell_policy
+        human_delay = not args.no_delay
+        min_delay = args.min_delay
+        max_delay = args.max_delay
+    else:
+        # Prompt for remaining settings (workspace already known)
+        (
+            selected_model, thinking, search, shell_policy,
+            human_delay, min_delay, max_delay,
+        ) = prompt_remaining_config()
 
+    # ------------------------------------------------------------------
+    #  Step 4: Build the agent
+    # ------------------------------------------------------------------
+    if resumed and saved_state:
         agent = EDUAgent(
             work_dir=work_dir,
             model=selected_model,
@@ -192,21 +224,6 @@ def main():
         )
         agent.resume_from_state(saved_state)
     else:
-        # Normal startup: prompt or use CLI args
-        if not (args.work_dir and args.model and args.shell_policy):
-            work_dir, selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay = (
-                prompt_agent_configuration()
-            )
-        else:
-            work_dir = str(Path(args.work_dir).expanduser().resolve())
-            selected_model = args.model
-            thinking = args.thinking
-            search = args.search
-            shell_policy = args.shell_policy
-            human_delay = not args.no_delay
-            min_delay = args.min_delay
-            max_delay = args.max_delay
-
         agent = EDUAgent(
             work_dir=work_dir,
             model=selected_model,
@@ -309,16 +326,57 @@ def main():
                 break
             if user_input.lower() == "/new":
                 print("\n🔄 Starting a new chat session...")
-                work_dir, selected_model, thinking, search, shell_policy, human_delay, min_delay, max_delay = (
-                    prompt_agent_configuration()
-                )
-                agent.new_chat(model=selected_model)
-                agent.thinking = thinking
-                agent.search = search
-                agent.shell_tool.policy = shell_policy
-                agent.client.human_delay = human_delay
-                agent.client.min_delay = min_delay
-                agent.client.max_delay = max_delay
+                work_dir = prompt_workspace()
+                # Check for saved state in new workspace before prompting remaining config
+                saved_state = None
+                for fname in ("agent_session.json", "agent_state.json"):
+                    cand_path = Path(work_dir) / ".eduagent" / fname
+                    if cand_path.exists():
+                        try:
+                            saved_state = json.loads(cand_path.read_text(encoding="utf-8"))
+                        except Exception:
+                            continue
+                        if saved_state:
+                            break
+                if saved_state:
+                    print(f"\n💾 A previous agent session was found in '{work_dir}':")
+                    print(_state_summary(saved_state))
+                    ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
+                    if ans in ("", "y", "yes"):
+                        work_dir = saved_state.get("work_dir", work_dir)
+                        selected_model = saved_state.get("model", "default")
+                        thinking = saved_state.get("thinking", False)
+                        search = saved_state.get("search", False)
+                        shell_policy = saved_state.get("shell_policy", "auto_safe_manual_unsafe")
+                        human_delay = saved_state.get("human_delay", True)
+                        min_delay = saved_state.get("min_delay", 1.0)
+                        max_delay = saved_state.get("max_delay", 3.0)
+                        agent = EDUAgent(
+                            work_dir=work_dir, model=selected_model,
+                            thinking=thinking, search=search,
+                            shell_policy=shell_policy,
+                            human_delay=human_delay, min_delay=min_delay, max_delay=max_delay,
+                        )
+                        agent.resume_from_state(saved_state)
+                    else:
+                        for fname in ("agent_session.json", "agent_state.json"):
+                            try:
+                                (Path(work_dir) / ".eduagent" / fname).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                        saved_state = None
+                if not saved_state:
+                    (
+                        selected_model, thinking, search, shell_policy,
+                        human_delay, min_delay, max_delay,
+                    ) = prompt_remaining_config()
+                    agent.new_chat(model=selected_model)
+                    agent.thinking = thinking
+                    agent.search = search
+                    agent.shell_tool.policy = shell_policy
+                    agent.client.human_delay = human_delay
+                    agent.client.min_delay = min_delay
+                    agent.client.max_delay = max_delay
                 # Persist the new config immediately
                 agent.save_state()
                 print(f"🔄 Switched to new chat session.\n")

@@ -104,8 +104,8 @@ class DeepSeekClient:
         session: Optional[Session] = None,
         allow_interactive: bool = True,
         human_delay: bool = True,
-        min_delay: float = 1.0,
-        max_delay: float = 3.0,
+        min_delay: float = 5.0,
+        max_delay: float = 10.0,
     ):
         self.session = session or get_session(allow_interactive=allow_interactive)
         self.human_delay = human_delay
