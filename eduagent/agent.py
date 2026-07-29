@@ -183,7 +183,7 @@ def parse_json_super_lenient(text: str) -> Optional[dict]:
         py_text = re.sub(r'\bfalse\b', 'False', py_text)
         py_text = re.sub(r'\bnull\b', 'None', py_text)
         parsed = ast.literal_eval(py_text)
-        if isinstance(parsed, dict) and "name" in parsed:
+        if isinstance(parsed, dict) and "name" in parsed and isinstance(parsed["name"], str):
             return parsed
     except Exception:
         pass
@@ -284,7 +284,7 @@ def _extract_and_clean_tool_calls(
             )
             for tc in tool_calls:
                 tc_name = tc.get("name")
-                if tc_name:
+                if tc_name and isinstance(tc_name, str):
                     clean_thinking = re.sub(
                         r"\{\s*\"name\"\s*:\s*\"" + re.escape(tc_name) + r"\".*?\}",
                         "",
@@ -299,7 +299,7 @@ def _extract_and_clean_tool_calls(
             )
             for tc in tool_calls:
                 tc_name = tc.get("name")
-                if tc_name:
+                if tc_name and isinstance(tc_name, str):
                     clean_text = re.sub(
                         r"\{\s*\"name\"\s*:\s*\"" + re.escape(tc_name) + r"\".*?\}",
                         "",
