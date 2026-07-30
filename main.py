@@ -27,6 +27,9 @@ def main():
         # If no valid session is found, allow_interactive=True launches browser window for login.
         session = get_session(allow_interactive=True)
         print(f"[EDUAgent] Authenticated successfully! (Token: {session.token[:10]}...)")
+    except KeyboardInterrupt:
+        print("\n[EDUAgent] Interrupted. Goodbye.")
+        sys.exit(0)
     except Exception as e:
         print(f"[EDUAgent] Authentication failed: {e}")
         sys.exit(1)
