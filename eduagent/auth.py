@@ -178,55 +178,64 @@ def login(
     """Interactive login. Opens a visible browser window for manual sign-in."""
     profile_dir.mkdir(parents=True, exist_ok=True)
     browser_path = _find_browser()
-    with sync_playwright() as p:
-        kwargs = dict(
-            executable_path=browser_path,
-            args=LAUNCH_ARGS,
-        ) if browser_path else dict(args=LAUNCH_ARGS)
-        context = p.chromium.launch_persistent_context(
-            str(profile_dir), headless=headless, **kwargs,
-        )
-        page = context.pages[0] if context.pages else context.new_page()
+    try:
+        with sync_playwright() as p:
+            kwargs = dict(
+                executable_path=browser_path,
+                args=LAUNCH_ARGS,
+            ) if browser_path else dict(args=LAUNCH_ARGS)
+            context = p.chromium.launch_persistent_context(
+                str(profile_dir), headless=headless, **kwargs,
+            )
+            page = context.pages[0] if context.pages else context.new_page()
 
-        existing = None
-        if not assume_logged_out:
-            _safe_goto(page, CHAT_URL)
-            existing = page.evaluate(_READ_TOKEN_JS)
+            existing = None
+            if not assume_logged_out:
+                _safe_goto(page, CHAT_URL)
+                existing = page.evaluate(_READ_TOKEN_JS)
 
-        if not existing:
-            _safe_goto(page, SIGNIN_URL)
-            print("[auth] Please sign in in the browser window (solve human check if requested).")
-            print("[auth] Waiting for active session...")
-            if not _wait_for_token(page, timeout=300):
-                context.close()
-                raise RuntimeError("Login timed out — no token captured.")
+            if not existing:
+                _safe_goto(page, SIGNIN_URL)
+                print("[auth] Please sign in in the browser window (solve human check if requested).")
+                print("[auth] Waiting for active session...")
+                if not _wait_for_token(page, timeout=300):
+                    context.close()
+                    raise RuntimeError("Login timed out — no token captured.")
 
-        session = _capture_from_context(context, page)
-        context.close()
-        if session is None:
-            raise RuntimeError("Logged in but could not read authentication token.")
-        session.save()
-        return session
+            session = _capture_from_context(context, page)
+            context.close()
+            if session is None:
+                raise RuntimeError("Logged in but could not read authentication token.")
+            session.save()
+            return session
+    except KeyboardInterrupt:
+        print("\n[auth] Login interrupted by user. Goodbye.")
+        import sys
+        sys.exit(0)
 
 
 def _headless_refresh(profile_dir: Path) -> Optional[Session]:
     """Try to capture a token headlessly from the persistent profile."""
     profile_dir.mkdir(parents=True, exist_ok=True)
     browser_path = _find_browser()
-    with sync_playwright() as p:
-        kwargs = dict(
-            executable_path=browser_path,
-            args=LAUNCH_ARGS,
-        ) if browser_path else dict(args=LAUNCH_ARGS)
-        context = p.chromium.launch_persistent_context(
-            str(profile_dir), headless=True, **kwargs,
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        try:
-            _safe_goto(page, CHAT_URL)
-            session = _capture_from_context(context, page)
-        finally:
-            context.close()
+    session = None
+    try:
+        with sync_playwright() as p:
+            kwargs = dict(
+                executable_path=browser_path,
+                args=LAUNCH_ARGS,
+            ) if browser_path else dict(args=LAUNCH_ARGS)
+            context = p.chromium.launch_persistent_context(
+                str(profile_dir), headless=True, **kwargs,
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            try:
+                _safe_goto(page, CHAT_URL)
+                session = _capture_from_context(context, page)
+            finally:
+                context.close()
+    except KeyboardInterrupt:
+        return None
 
     if session is not None:
         session.save()
@@ -244,7 +253,10 @@ def get_session(
     if cached and cached.age < max_age:
         return cached
 
-    session = _headless_refresh(profile_dir)
+    try:
+        session = _headless_refresh(profile_dir)
+    except KeyboardInterrupt:
+        session = None
     if session is not None:
         return session
 

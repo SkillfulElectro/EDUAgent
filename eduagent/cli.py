@@ -53,7 +53,11 @@ def prompt_workspace() -> str:
     """Ask user for the workspace directory only."""
     print("⚙️  EDUAgent Launch Setup")
     print("--------------------------------------------------")
-    ws_input = input("📁 Workspace directory [default: ./workspace]: ").strip()
+    try:
+        ws_input = input("📁 Workspace directory [default: ./workspace]: ").strip()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(0)
     return str(Path(ws_input if ws_input else "./workspace").expanduser().resolve())
 
 
@@ -64,15 +68,27 @@ def prompt_remaining_config() -> tuple[str, bool, bool, str, bool, float, float]
     print("\n🤖 Select DeepSeek Model:")
     print("  [1] Instant (Fast default model)")
     print("  [2] Expert  (Stronger, slower expert model)")
-    model_choice = input("Enter choice (1/2) [default: 1]: ").strip().lower()
+    try:
+        model_choice = input("Enter choice (1/2) [default: 1]: ").strip().lower()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(0)
     selected_model = "expert" if model_choice in ("2", "expert", "deepseek-expert") else "default"
 
     # Thinking Mode
-    think_input = input("\n🧠 Enable DeepThink reasoning mode? (y/n) [default: n]: ").strip().lower()
+    try:
+        think_input = input("\n🧠 Enable DeepThink reasoning mode? (y/n) [default: n]: ").strip().lower()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(0)
     thinking = think_input in ("y", "yes")
 
     # Search Mode
-    search_input = input("🌐 Enable web search mode? (y/n) [default: n]: ").strip().lower()
+    try:
+        search_input = input("🌐 Enable web search mode? (y/n) [default: n]: ").strip().lower()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(0)
     search = search_input in ("y", "yes")
 
     # Shell Execution Safety Policy
@@ -81,7 +97,11 @@ def prompt_remaining_config() -> tuple[str, bool, bool, str, bool, float, float]
     print("  [2] Auto Accept               (Run all commands automatically)")
     print("  [3] Auto Safe, Reject Unsafe  (Auto-run safe commands, auto-reject unsafe)")
     print("  [4] Auto Safe, Manual Unsafe  (Auto-run safe, prompt for unsafe) [default]")
-    policy_choice = input("Enter choice (1-4) [default: 4]: ").strip()
+    try:
+        policy_choice = input("Enter choice (1-4) [default: 4]: ").strip()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(0)
 
     policies = {
         "1": "manual",
@@ -93,11 +113,19 @@ def prompt_remaining_config() -> tuple[str, bool, bool, str, bool, float, float]
 
     # Human Delay Customization
     print("\n⏱️  Human-like Request Pacing Delay:")
-    delay_enable = input("  Enable randomized delay before requests? (y/n) [default: y]: ").strip().lower()
+    try:
+        delay_enable = input("  Enable randomized delay before requests? (y/n) [default: y]: ").strip().lower()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(0)
     human_delay = delay_enable not in ("n", "no", "false", "0")
     min_delay, max_delay = 5.0, 10.0
     if human_delay:
-        delay_range = input("  Enter delay range in seconds (min-max) [default: 5.0-10.0]: ").strip()
+        try:
+            delay_range = input("  Enter delay range in seconds (min-max) [default: 5.0-10.0]: ").strip()
+        except KeyboardInterrupt:
+            print("\nAborted.")
+            sys.exit(0)
         if delay_range and "-" in delay_range:
             try:
                 parts = delay_range.split("-")
@@ -156,7 +184,11 @@ def main():
         if saved_state:
             print(f"\n💾 A previous agent session was found ({state_source}):")
             print(_state_summary(saved_state))
-            ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
+            try:
+                ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
+            except KeyboardInterrupt:
+                print("\nAborted.")
+                sys.exit(0)
             if ans in ("", "y", "yes"):
                 resumed = True
                 # Use work_dir from saved state (in case it moved)
@@ -164,7 +196,11 @@ def main():
                 # Verify work_dir still exists; create if missing
                 if not Path(work_dir).exists():
                     print(f"⚠️  Saved workspace '{work_dir}' no longer exists.")
-                    ans2 = input("   Create it now? (y/n) [default: y]: ").strip().lower()
+                    try:
+                        ans2 = input("   Create it now? (y/n) [default: y]: ").strip().lower()
+                    except KeyboardInterrupt:
+                        print("\nAborted.")
+                        sys.exit(0)
                     if ans2 in ("", "y", "yes"):
                         Path(work_dir).mkdir(parents=True, exist_ok=True)
                     else:
@@ -295,7 +331,11 @@ def main():
                     print(tasks_output)
             except Exception:
                 pass
-            choice = input("   Continue? (y/n/auto) [default: y]: ").strip().lower()
+            try:
+                choice = input("   Continue? (y/n/auto) [default: y]: ").strip().lower()
+            except KeyboardInterrupt:
+                print("\n👋 Interrupted. Exiting exhaustion handler.")
+                break
             if choice == "n":
                 break
             elif choice == "auto":
@@ -319,7 +359,11 @@ def main():
 
     try:
         while True:
-            user_input = read_multiline()
+            try:
+                user_input = read_multiline()
+            except KeyboardInterrupt:
+                print("\n👋 Interrupted. Saving state and exiting...")
+                break
             if not user_input:
                 continue
             if user_input.lower() in ("exit", "quit", "/exit"):
@@ -341,7 +385,11 @@ def main():
                 if saved_state:
                     print(f"\n💾 A previous agent session was found in '{work_dir}':")
                     print(_state_summary(saved_state))
-                    ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
+                    try:
+                        ans = input("   Resume this session? (y/n) [default: y]: ").strip().lower()
+                    except KeyboardInterrupt:
+                        print("\nAborted.")
+                        sys.exit(0)
                     if ans in ("", "y", "yes"):
                         work_dir = saved_state.get("work_dir", work_dir)
                         selected_model = saved_state.get("model", "default")
@@ -387,17 +435,25 @@ def main():
                 agent.save_state()
                 print("🔄 Started a new chat session (workspace and settings unchanged).")
                 print("📋 Resuming previous task via todo list...\n")
-                reply = agent.chat(
-                    "continue with the task, use your to do list tool to check where you left.",
-                    verbose=True,
-                    max_tool_iterations=args.max_iterations,
-                )
+                try:
+                    reply = agent.chat(
+                        "continue with the task, use your to do list tool to check where you left.",
+                        verbose=True,
+                        max_tool_iterations=args.max_iterations,
+                    )
+                except KeyboardInterrupt:
+                    print("\n👋 Interrupted during agent response. Saving state...")
+                    break
                 agent.save_state()
                 _handle_exhaustion(reply)
                 print()
                 continue
 
-            reply = agent.chat(user_input, verbose=True, max_tool_iterations=args.max_iterations)
+            try:
+                reply = agent.chat(user_input, verbose=True, max_tool_iterations=args.max_iterations)
+            except KeyboardInterrupt:
+                print("\n👋 Interrupted during agent response. Saving state...")
+                break
             agent.save_state()  # persist state after every response for crash resilience
             _handle_exhaustion(reply)
             print()

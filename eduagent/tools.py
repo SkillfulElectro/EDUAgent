@@ -111,22 +111,29 @@ class FileTools:
         target.write_text(content, encoding="utf-8")
         return f"Successfully wrote to '{path}'."
 
-    def edit_file(self, path: str, old_str: str, new_str: str) -> str:
-        """Replace `old_str` with `new_str` inside a file in work_dir."""
+    def edit_file(self, path: str, old_str: str, new_str: str, replace_all: bool = False) -> str:
+        """Replace `old_str` with `new_str` inside a file in work_dir.
+
+        By default only replaces the first occurrence. Set replace_all=True to
+        replace every occurrence. Also normalizes line endings, trailing whitespace,
+        and has a fuzzy fallback for triple-dash flags (--- → --).
+        """
         target = self._safe_path(path)
         if not target.exists() or not target.is_file():
             return f"Error: File '{path}' does not exist or is not a file."
         content = target.read_text(encoding="utf-8")
+        count = -1 if replace_all else 1
 
         if old_str in content:
-            target.write_text(content.replace(old_str, new_str, 1), encoding="utf-8")
-            return f"Successfully edited '{path}'."
+            target.write_text(content.replace(old_str, new_str, count), encoding="utf-8")
+            scope = "all occurrences" if replace_all else "first occurrence"
+            return f"Successfully edited '{path}' ({scope})."
 
         norm_content = content.replace("\r\n", "\n")
         norm_old = old_str.replace("\r\n", "\n")
         norm_new = new_str.replace("\r\n", "\n")
         if norm_old in norm_content:
-            target.write_text(norm_content.replace(norm_old, norm_new, 1), encoding="utf-8")
+            target.write_text(norm_content.replace(norm_old, norm_new, count), encoding="utf-8")
             return f"Successfully edited '{path}' (normalized line endings)."
 
         lines_content = [line.rstrip() for line in norm_content.split("\n")]
@@ -134,14 +141,15 @@ class FileTools:
         joined_content = "\n".join(lines_content)
         joined_old = "\n".join(lines_old)
         if joined_old in joined_content:
-            target.write_text(joined_content.replace(joined_old, norm_new, 1), encoding="utf-8")
+            target.write_text(joined_content.replace(joined_old, norm_new, count), encoding="utf-8")
             return f"Successfully edited '{path}' (normalized whitespace)."
 
+        # Fuzzy fallback: some LLMs emit '---' when the file actually has '--'
         if "---" in norm_old:
             alt_old = norm_old.replace("---", "--")
             if alt_old in norm_content:
-                target.write_text(norm_content.replace(alt_old, norm_new, 1), encoding="utf-8")
-                return f"Successfully edited '{path}' (fuzzy flag match)."
+                target.write_text(norm_content.replace(alt_old, norm_new, count), encoding="utf-8")
+                return f"Successfully edited '{path}' (fuzzy '---'→'--' match)."
 
         return f"Error: 'old_str' not found in file '{path}'."
 
@@ -188,11 +196,12 @@ class FileTools:
             },
             {
                 "name": "edit_file",
-                "description": "Replace `old_str` with `new_str` in a file inside the restricted work directory.",
+                "description": "Replace `old_str` with `new_str` in a file inside the restricted work directory. By default replaces only the first occurrence; set replace_all=true to replace all. Has fuzzy fallback for '---' vs '--' differences.",
                 "parameters": {
                     "path": "str (relative path)",
                     "old_str": "str (exact substring to match)",
                     "new_str": "str (replacement substring)",
+                    "replace_all": "bool (optional, default false — replace first only; true = replace all)",
                 },
             },
             {
@@ -250,20 +259,22 @@ class ShellTool:
                 text=True,
                 timeout=timeout,
             )
-            out = res.stdout.strip()
-            err = res.stderr.strip()
-            result_lines = [f"[Exit Code: {res.returncode}]"]
-            if out:
-                result_lines.append(f"STDOUT:\n{out}")
-            if err:
-                result_lines.append(f"STDERR:\n{err}")
-            if not out and not err:
-                result_lines.append("(No output returned)")
-            return "\n".join(result_lines)
+        except KeyboardInterrupt:
+            return "Execution Interrupted: User pressed Ctrl+C."
         except subprocess.TimeoutExpired:
             return f"Execution Error: Command timed out after {timeout} seconds."
         except Exception as e:
             return f"Execution Error: {e}"
+        out = res.stdout.strip()
+        err = res.stderr.strip()
+        result_lines = [f"[Exit Code: {res.returncode}]"]
+        if out:
+            result_lines.append(f"STDOUT:\n{out}")
+        if err:
+            result_lines.append(f"STDERR:\n{err}")
+        if not out and not err:
+            result_lines.append("(No output returned)")
+        return "\n".join(result_lines)
 
     def _prompt_user(self, command: str, is_safe: bool, reason: str) -> bool:
         status_str = "SAFE" if is_safe else f"UNSAFE ({reason})"

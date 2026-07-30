@@ -115,9 +115,25 @@ def extract_tool_call_heuristically(text: str) -> Optional[dict]:
     if not args_match:
         return {"name": tool_name, "arguments": {}}
 
-    args_str = text[args_match.end():]
+    args_str = text[args_match.end() - 1:]  # include the opening '{'
 
-    arg_keys = re.findall(r'"(\w+)"\s*:\s*"|\'(\w+)\'\s*:\s*\'', args_str)
+    # First attempt: use balanced-brace detection to isolate the arguments
+    # object, then try proper JSON parsing. This prevents misidentification
+    # of key boundaries when long string values contain '"key": "' patterns.
+    balanced_end = find_balanced_json_end(args_str, 0)
+    if balanced_end != -1:
+        isolated_args = args_str[:balanced_end + 1]
+        try:
+            parsed_args = parse_json_super_lenient(isolated_args)
+            if parsed_args and isinstance(parsed_args, dict):
+                return {"name": tool_name, "arguments": parsed_args}
+        except Exception:
+            pass
+
+    # Fallback: regex-based heuristic extraction (kept for malformed JSON)
+    args_body = args_str[1:]  # remove opening brace
+
+    arg_keys = re.findall(r'"(\w+)"\s*:\s*"|\'(\w+)\'\s*:\s*\'', args_body)
     keys = [k[0] or k[1] for k in arg_keys]
 
     if not keys:
@@ -126,7 +142,7 @@ def extract_tool_call_heuristically(text: str) -> Optional[dict]:
     arguments = {}
     key_positions = []
     for k in keys:
-        m = re.search(r'["\']' + re.escape(k) + r'["\']\s*:\s*["\']', args_str)
+        m = re.search(r'["\']' + re.escape(k) + r'["\']\s*:\s*["\']', args_body)
         if m:
             key_positions.append((m.start(), m.end(), k))
 
@@ -136,13 +152,13 @@ def extract_tool_call_heuristically(text: str) -> Optional[dict]:
         pos_start, val_start, k = key_positions[i]
         if i + 1 < len(key_positions):
             val_end = key_positions[i+1][0]
-            raw_val = args_str[val_start:val_end]
+            raw_val = args_body[val_start:val_end]
             raw_val = re.sub(r'["\']\s*,\s*$', '', raw_val.rstrip())
         else:
-            val_end = args_str.rfind('}')
+            val_end = args_body.rfind('}')
             if val_end == -1:
-                val_end = len(args_str)
-            raw_val = args_str[val_start:val_end]
+                val_end = len(args_body)
+            raw_val = args_body[val_start:val_end]
             raw_val = re.sub(r'["\']\s*\}*\s*$', '', raw_val.rstrip())
 
         val_clean = raw_val.replace('\\"', '"').replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
@@ -400,9 +416,16 @@ class EDUAgent:
         lines.append(f"ALL file operations and shell command execution are RESTRICTED to the workspace directory: '{self.file_tools.work_dir}'.")
         lines.append("\nAvailable Tools:")
         for t in all_defs:
+            params = t.get('parameters', {})
+            if isinstance(params, dict):
+                # Condensed parameter list instead of full JSON schema to save context
+                param_parts = [f"{k}: {v}" for k, v in params.items()]
+                param_str = ", ".join(param_parts) if param_parts else "none"
+            else:
+                param_str = str(params)
             lines.append(f"- Name: {t['name']}")
             lines.append(f"  Description: {t['description']}")
-            lines.append(f"  Parameters: {json.dumps(t['parameters'])}")
+            lines.append(f"  Parameters: {{{param_str}}}")
 
         lines.append("""
 When starting a task or resuming a conversation, you MUST:
@@ -574,6 +597,12 @@ Important - Tool-Iteration Limit and Checkpointing:
                     sys.stdout.flush()
 
                 self._conversation_id = stream_obj.conversation_id
+            except KeyboardInterrupt:
+                if last_reply is None:
+                    last_reply = Reply(text="", conversation_id=self._conversation_id or "")
+                last_reply.interrupted = True
+                last_reply.exhausted = True
+                break
             except SessionExpiredError as e:
                 if verbose:
                     print(f"\n⚠️  Session expired: {e}")

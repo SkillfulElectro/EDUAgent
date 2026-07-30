@@ -67,6 +67,7 @@ class Reply:
     conversation_id: str
     thinking: Optional[str] = None
     exhausted: bool = False
+    interrupted: bool = False
 
     def __str__(self) -> str:
         return self.text
@@ -148,11 +149,16 @@ class DeepSeekClient:
                 r = self._http.post("/api/v0/chat_session/create", json={})
                 r.raise_for_status()
                 return _biz(r.json())["chat_session"]["id"]
+            except KeyboardInterrupt:
+                raise
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
                 if attempt == 2:
                     raise
                 print(f"[client] Connection attempt {attempt+1} failed, retrying... ({e})")
-                time.sleep(2 ** attempt)
+                try:
+                    time.sleep(2 ** attempt)
+                except KeyboardInterrupt:
+                    raise
 
     def _pow_header(self, target_path: str = COMPLETION_PATH) -> str:
         last_exc = None
@@ -166,13 +172,18 @@ class DeepSeekClient:
                 challenge = _biz(r.json())["challenge"]
                 with self._pow_lock:
                     return self._pow.make_header(challenge)
+            except KeyboardInterrupt:
+                raise
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
                 last_exc = e
                 if attempt < 4:
                     wait = 2 ** attempt  # 1s, 2s, 4s, 8s
                     print(f"[client] PoW challenge request attempt {attempt+1} failed, "
                           f"retrying in {wait}s... ({e})")
-                    time.sleep(wait)
+                    try:
+                        time.sleep(wait)
+                    except KeyboardInterrupt:
+                        raise
         raise last_exc
 
     def stream(
