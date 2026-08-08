@@ -448,6 +448,7 @@ To execute a tool, format your output strictly as a JSON object inside <tool_cal
 }
 </tool_call>
 
+- use at most 3 tool calls per turn.
 """)
 
 
