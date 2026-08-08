@@ -68,6 +68,7 @@ class Reply:
     thinking: Optional[str] = None
     exhausted: bool = False
     interrupted: bool = False
+    pending_tool_results: Optional[str] = None
 
     def __str__(self) -> str:
         return self.text

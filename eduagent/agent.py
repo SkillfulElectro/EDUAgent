@@ -359,7 +359,7 @@ class EDUAgent:
         self.file_tools = FileTools(work_dir)
         self.shell_tool = ShellTool(self.file_tools.work_dir, policy=shell_policy)
         self.todo_tools = TodoListTools(self.file_tools.work_dir)
-        self.mcp_manager = MCPManager()
+        self.mcp_manager = MCPManager(workspace=str(self.file_tools.work_dir.resolve()))
 
         if mcp_config_path:
             self.mcp_manager.load_from_json(mcp_config_path)
@@ -448,18 +448,9 @@ To execute a tool, format your output strictly as a JSON object inside <tool_cal
 }
 </tool_call>
 
-You can perform one tool call per turn. After receiving <tool_result>, present your analysis or final answer.
 """)
 
-        lines.append("""
-Important - Tool-Iteration Limit and Checkpointing:
-- You are limited to a maximum number of tool calls per user message (indicated by the iteration counter in <tool_result>, e.g. iteration 5/10).
-- When you have only 1-2 iterations remaining, you MUST stop issuing further tools and instead:
-    1. Update the todo list with your current progress.
-    2. Write a brief progress summary for the user.
-    3. End your response so the user can say continue to resume.
-- When the user says continue or resume, first call list_tasks to find where you left off.
-""")
+
         return "\n".join(lines)
 
     def _prepare_prompt(self, message: str) -> str:
@@ -662,10 +653,8 @@ Important - Tool-Iteration Limit and Checkpointing:
                         output_summary += f"\n     ... ({len(lines_res) - 10} more lines)"
                     print(f"   Output:\n{output_summary}\n")
 
-                remaining = max_tool_iterations - iteration
-                iter_note = f"\n(iteration {iteration}/{max_tool_iterations}, {remaining} remaining)"
                 results.append(
-                    f"<tool_result>\nTool '{t_name}' execution output ({iteration}/{max_tool_iterations}):\n{res}{iter_note}\n</tool_result>"
+                    f"<tool_result>\nTool '{t_name}' execution output:\n{res}\n</tool_result>"
                 )
 
             current_prompt = "\n".join(results)
@@ -674,6 +663,7 @@ Important - Tool-Iteration Limit and Checkpointing:
         if last_reply is None:
             last_reply = Reply(text="", conversation_id=self._conversation_id or "")
         last_reply.exhausted = True
+        last_reply.pending_tool_results = current_prompt
         return last_reply
 
     def stream(

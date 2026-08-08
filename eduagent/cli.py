@@ -315,8 +315,9 @@ def main():
                     print("\n🛑 Auto-continue safety limit (5) reached. Dropping back to prompt.\n")
                     break
                 print("⏳ Auto-continuing...\n")
+                continuation_prompt = _continuation_prompt(reply)
                 reply = agent.chat(
-                    "Continue where you left off. Check your todo list to resume.",
+                    continuation_prompt,
                     verbose=True,
                     max_tool_iterations=args.max_iterations,
                 )
@@ -342,20 +343,31 @@ def main():
                 auto_continue = True
                 auto_continue_count = 0
                 print("⏳ Auto-continuing future exhaustions...")
+                continuation_prompt = _continuation_prompt(reply)
                 reply = agent.chat(
-                    "Continue where you left off. Check your todo list to resume.",
+                    continuation_prompt,
                     verbose=True,
                     max_tool_iterations=args.max_iterations,
                 )
                 agent.save_state()
             else:  # default 'y'
+                continuation_prompt = _continuation_prompt(reply)
                 reply = agent.chat(
-                    "Continue where you left off. Check your todo list to resume.",
+                    continuation_prompt,
                     verbose=True,
                     max_tool_iterations=args.max_iterations,
                 )
                 agent.save_state()
         return reply
+
+    def _continuation_prompt(reply):
+        """Build the prompt to send when continuing after exhaustion.
+        If the exhausted reply carries pending_tool_results, send those
+        so the model can pick up where it left off. Otherwise fall back
+        to a generic continue instruction."""
+        if reply.pending_tool_results:
+            return reply.pending_tool_results
+        return "Continue where you left off. Check your todo list to resume."
 
     try:
         while True:
@@ -369,6 +381,7 @@ def main():
             if user_input.lower() in ("exit", "quit", "/exit"):
                 break
             if user_input.lower() == "/new":
+                agent.close()  # clean up old MCP connections before replacing
                 print("\n🔄 Starting a new chat session...")
                 work_dir = prompt_workspace()
                 # Check for saved state in new workspace before prompting remaining config
@@ -418,13 +431,18 @@ def main():
                         selected_model, thinking, search, shell_policy,
                         human_delay, min_delay, max_delay,
                     ) = prompt_remaining_config()
-                    agent.new_chat(model=selected_model)
-                    agent.thinking = thinking
-                    agent.search = search
-                    agent.shell_tool.policy = shell_policy
-                    agent.client.human_delay = human_delay
-                    agent.client.min_delay = min_delay
-                    agent.client.max_delay = max_delay
+                    # Create a fresh agent with the new workspace — otherwise
+                    # new_chat() alone keeps the old work_dir, file_tools, etc.
+                    agent = EDUAgent(
+                        work_dir=work_dir,
+                        model=selected_model,
+                        thinking=thinking,
+                        search=search,
+                        shell_policy=shell_policy,
+                        human_delay=human_delay,
+                        min_delay=min_delay,
+                        max_delay=max_delay,
+                    )
                 # Persist the new config immediately
                 agent.save_state()
                 print(f"🔄 Switched to new chat session.\n")

@@ -1,1 +1,17 @@
-{}
+{
+  "mcpServers": {
+    "markitdown": {
+        "command": "uvx",
+        "args": [
+            "markitdown-mcp"
+        ]
+    },
+    "memory": {
+      "command": "bash",
+      "args": ["-c" , "mkdir -p {%workspace%}/.edumem && npx -y @modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "{%workspace%}/.edumem/memory.json"
+      }
+    }
+  }
+}

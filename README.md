@@ -76,8 +76,8 @@ Single-line messages work as before — just press Enter once after your input.
 
 ## Configuring MCP Servers (mcp_servers.json)
 
-To connect external Model Context Protocol (MCP) servers, add them to mcp_servers.json using the standard JSON format:
-code JSON
+To connect external Model Context Protocol (MCP) servers, add them to `mcp_servers.json` using the standard JSON format:
+
 ```json
 {
   "mcpServers": {
@@ -86,7 +86,7 @@ code JSON
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "./workspace"
+        "{%workspace%}"
       ]
     },
     "fetch": {
@@ -96,7 +96,42 @@ code JSON
   }
 }
 ```
+
 When EDUAgent launches, it automatically connects to all configured MCP servers and registers their tools.
+
+### Template variable: `{%workspace%}`
+
+The placeholder `{%workspace%}` is replaced with the absolute path of the agent's workspace directory at startup. It works in any string value — `command`, `args`, `cwd`, `env`, `url`, or `headers`.
+
+For example, to run an MCP server inside the workspace and point it at a data subdirectory:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": ["{%workspace%}/mcp-server/index.js"],
+      "cwd": "{%workspace%}",
+      "env": {
+        "DATA_DIR": "{%workspace%}/data"
+      }
+    }
+  }
+}
+```
+
+If the workspace is `/home/user/project`, the resolved config becomes:
+
+```json
+{
+  "command": "node",
+  "args": ["/home/user/project/mcp-server/index.js"],
+  "cwd": "/home/user/project",
+  "env": {
+    "DATA_DIR": "/home/user/project/data"
+  }
+}
+```
 
 ## License
 GPL-3.0

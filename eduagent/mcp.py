@@ -59,8 +59,9 @@ class MCPManager:
         close()
     """
 
-    def __init__(self):
+    def __init__(self, workspace: str):
         self._tool_defs: List[dict] = []
+        self._workspace = workspace  # for {%workspace%} template expansion
 
         # Used by the component_name_hook to prefix tool names with the
         # config key of the server currently being connected.
@@ -121,6 +122,31 @@ class MCPManager:
             })
 
     # ------------------------------------------------------------------
+    # Template resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_templates(self, value: str) -> str:
+        """Expand `{%workspace%}` placeholders in a string value."""
+        return value.replace("{%workspace%}", self._workspace)
+
+    def _resolve_config_dict(self, cfg: dict) -> dict:
+        """Recursively resolve template placeholders in a config dict."""
+        resolved = {}
+        for key, val in cfg.items():
+            if isinstance(val, str):
+                resolved[key] = self._resolve_templates(val)
+            elif isinstance(val, dict):
+                resolved[key] = self._resolve_config_dict(val)
+            elif isinstance(val, list):
+                resolved[key] = [
+                    self._resolve_templates(v) if isinstance(v, str) else v
+                    for v in val
+                ]
+            else:
+                resolved[key] = val
+        return resolved
+
+    # ------------------------------------------------------------------
     # Config loading
     # ------------------------------------------------------------------
 
@@ -153,11 +179,12 @@ class MCPManager:
                 if not isinstance(cfg, dict):
                     continue
                 try:
-                    transport = cfg.get("transport", "stdio")
+                    resolved_cfg = self._resolve_config_dict(cfg)
+                    transport = resolved_cfg.get("transport", "stdio")
                     if transport == "http":
-                        params = self._build_http_params(config_name, cfg)
+                        params = self._build_http_params(config_name, resolved_cfg)
                     else:
-                        params = self._build_stdio_params(config_name, cfg)
+                        params = self._build_stdio_params(config_name, resolved_cfg)
 
                     if params is None:
                         continue
