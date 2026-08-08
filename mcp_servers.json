@@ -8,9 +8,9 @@
     },
     "memory": {
       "command": "bash",
-      "args": ["-c" , "mkdir -p {%workspace%}/.edumem && npx -y @modelcontextprotocol/server-memory"],
+      "args": ["-c" , "mkdir -p {%workspace%}/.eduagent && npx -y @modelcontextprotocol/server-memory"],
       "env": {
-        "MEMORY_FILE_PATH": "{%workspace%}/.edumem/memory.json"
+        "MEMORY_FILE_PATH": "{%workspace%}/.eduagent/memory.json"
       }
     }
   }
